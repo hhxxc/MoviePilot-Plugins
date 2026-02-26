@@ -3259,9 +3259,9 @@ class BrushFlowLowFreq(_PluginBase):
             logger.error(f"获取下载链接失败：{torrent.title}")
             return None
 
-        if brush_config.site_skip_tips:
-            torrent_content = self.__reset_download_url(torrent_url=torrent_content, site_id=torrent.site)
-            logger.debug(f"站点 {torrent.site_name} 已启用自动跳过提示，种子下载地址更新为 {torrent_content}")
+        # 强制给所有刷流种子加 &letdown=1（低分享率站点必备）
+        torrent_content = self.__reset_download_url(torrent_url=torrent_content, site_id=torrent.site)
+        logger.debug(f"站点 {torrent.site_name} 已强制添加 letdown=1 参数，下载地址更新为 {torrent_content}")
 
         downloader = self.downloader
         if not downloader:
