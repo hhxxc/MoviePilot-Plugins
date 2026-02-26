@@ -23,7 +23,7 @@ lock = threading.Lock()
 
 class BrushManager(_PluginBase):
     # 插件名称
-    plugin_name = "刷流种子整理"
+    plugin_name = "刷流种子整理hhxxc"
     # 插件描述
     plugin_desc = "针对刷流种子进行整理操作。"
     # 插件图标
