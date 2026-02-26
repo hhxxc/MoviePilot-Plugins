@@ -3226,7 +3226,7 @@ class BrushFlowLowFreq(_PluginBase):
             logger.error(f"Error while resetting downloader URL for torrent: {torrent_url}. Error: {str(e)}")
             return torrent_url
 
-    def __download(self, torrent: TorrentInfo) -> Optional[str]:
+       def __download(self, torrent: TorrentInfo) -> Optional[str]:
         """
         添加下载任务
         """
@@ -3259,70 +3259,77 @@ class BrushFlowLowFreq(_PluginBase):
             logger.error(f"获取下载链接失败：{torrent.title}")
             return None
 
-        # ===== 强制预访问详情页 + 加强调试（蟹黄堡低比率专用）=====
-        if torrent.page_url:
-            logger.debug(f"【蟹黄堡低比率优化】先预访问详情页激活下载权限: {torrent.page_url}")
-            # 预访问详情页（关键！很多站点需要这一步）
-            pre_res = RequestUtils(
+        # ==================== 蟹黄堡低比率专用：模拟两次请求 ====================
+        logger.debug(f"【蟹黄堡激活】开始模拟浏览器两次请求流程 - {torrent.title}")
+
+        # 第一步：POST 到 downloadadnotice.php 激活确认
+        if torrent.enclosure and "download.php" in torrent.enclosure:
+            notice_url = torrent.enclosure.replace("download.php", "downloadadnotice.php").split("&letdown=")[0]
+            logger.debug(f"【蟹黄堡激活】第一步 POST notice 页: {notice_url}")
+            
+            notice_res = RequestUtils(
                 cookies=cookies,
                 proxies=proxies,
                 ua=torrent.site_ua,
-                headers={"Referer": torrent.page_url}  # 带 Referer 更像浏览器
-            ).get_res(torrent.page_url)
-            if pre_res and pre_res.status_code == 200:
-                logger.debug(f"预访问详情页成功，状态码 200")
+                headers={
+                    "Referer": torrent.page_url or "https://crabpt.vip/",
+                    "Content-Type": "application/x-www-form-urlencoded"
+                }
+            ).post_res(notice_url, data={})   # data={} 空表单，先试这个
+
+            if notice_res:
+                logger.debug(f"POST notice 成功 → 状态码: {notice_res.status_code}")
+                if notice_res.status_code == 302:
+                    logger.debug("检测到 302 重定向，激活成功！")
             else:
-                logger.warning(f"预访问详情页失败，状态码: {pre_res.status_code if pre_res else 'None'}")
-            time.sleep(1.5)  # 给服务器反应时间
+                logger.warning("POST notice 无响应")
 
-        # 强制加 letdown=1（你已经改过）
-        torrent_content = self.__reset_download_url(torrent_url=torrent_content, site_id=torrent.site)
+            time.sleep(2.5)  # 重要！给站点设置 session 的时间
 
-        # ===== 关键调试：打印下载到的内容特征 =====
+        # 第二步：带 letdown=1 请求真实 torrent
+        torrent_content = self.__reset_download_url(torrent_url=torrent.enclosure, site_id=torrent.site)
+        logger.debug(f"【蟹黄堡激活】第二步 GET 下载链接: {torrent_content}")
+
+        # ==================== 关键调试：检查最终拿到的是不是真实 torrent ====================
         if isinstance(torrent_content, (bytes, bytearray)):
             content_len = len(torrent_content)
-            is_torrent = torrent_content.startswith(b'd8:announce') or b'announce' in torrent_content[:200]
-            logger.debug(f"下载到内容长度: {content_len} 字节 | 是否有效torrent开头: {is_torrent}")
-            if not is_torrent and content_len < 500:
-                logger.warning(f"警告！下载内容疑似不是torrent！前200字符: {torrent_content[:200]}")
+            is_valid_torrent = torrent_content.startswith(b'd8:announce') or b'announce' in torrent_content[:1000]
+            logger.debug(f"最终下载内容长度: {content_len} 字节 | 是否有效 torrent: {is_valid_torrent}")
+            if not is_valid_torrent and content_len < 1000:
+                logger.warning(f"【警告】内容疑似不是 torrent！前300字符: {torrent_content[:300]}")
         else:
-            logger.debug(f"下载内容不是二进制，直接传URL: {torrent_content[:100]}...")
-        # ============================================
-
-        logger.debug(f"站点 {torrent.site_name} 已强制添加 &letdown=1 并预访问详情页，准备添加任务")
-        logger.debug(f"站点 {torrent.site_name} 已强制添加 letdown=1 参数，下载地址更新为 {torrent_content}")
+            logger.debug(f"下载内容不是二进制，直接传递 URL")
+        # =========================================================================
 
         downloader = self.downloader
         if not downloader:
             return None
 
         if self.downloader_helper.is_downloader("qbittorrent", service=self.service_info):
-            # 限速值转为bytes
             up_speed = up_speed * 1024 if up_speed else None
             down_speed = down_speed * 1024 if down_speed else None
-            # 生成随机Tag
             tag = StringUtils.generate_random_str(10)
-            # 如果开启代理下载以及种子地址不是磁力地址，则请求种子到内存再传入下载器
+
             if not torrent_content.startswith("magnet"):
-                response = RequestUtils(cookies=cookies,
-                                        proxies=proxies,
-                                        ua=torrent.site_ua).get_res(url=torrent_content)
+                response = RequestUtils(cookies=cookies, proxies=proxies, ua=torrent.site_ua).get_res(url=torrent_content)
                 if response and response.ok:
                     torrent_content = response.content
                 else:
-                    logger.error("尝试通过MP下载种子失败，继续尝试传递种子地址到下载器进行下载")
+                    logger.error("尝试通过MP下载种子失败，继续尝试传递种子地址")
+
             if torrent_content:
-                state = downloader.add_torrent(content=torrent_content,
-                                               download_dir=download_dir,
-                                               cookie=cookies,
-                                               category=brush_config.qb_category,
-                                               tag=["已整理", brush_config.brush_tag, tag],
-                                               upload_limit=up_speed,
-                                               download_limit=down_speed)
+                state = downloader.add_torrent(
+                    content=torrent_content,
+                    download_dir=download_dir,
+                    cookie=cookies,
+                    category=brush_config.qb_category,
+                    tag=["已整理", brush_config.brush_tag, tag],
+                    upload_limit=up_speed,
+                    download_limit=down_speed
+                )
                 if not state:
                     return None
                 else:
-                    # 获取种子Hash
                     torrent_hash = downloader.get_torrent_id_by_tag(tags=tag)
                     if not torrent_hash:
                         logger.error(f"{brush_config.downloader} 获取种子Hash失败，详细信息请查看 README")
@@ -3330,29 +3337,25 @@ class BrushFlowLowFreq(_PluginBase):
                     return torrent_hash
             return None
 
+        # Transmission 部分保持不变
         elif self.downloader_helper.is_downloader("transmission", service=self.service_info):
-            # 如果开启代理下载以及种子地址不是磁力地址，则请求种子到内存再传入下载器
             if not torrent_content.startswith("magnet"):
-                response = RequestUtils(cookies=cookies,
-                                        proxies=proxies,
-                                        ua=torrent.site_ua).get_res(url=torrent_content)
+                response = RequestUtils(cookies=cookies, proxies=proxies, ua=torrent.site_ua).get_res(url=torrent_content)
                 if response and response.ok:
                     torrent_content = response.content
-                else:
-                    logger.error("尝试通过MP下载种子失败，继续尝试传递种子地址到下载器进行下载")
             if torrent_content:
-                torrent = downloader.add_torrent(content=torrent_content,
-                                                 download_dir=download_dir,
-                                                 cookie=cookies,
-                                                 labels=["已整理", brush_config.brush_tag])
-                if not torrent:
+                torrent_obj = downloader.add_torrent(content=torrent_content,
+                                                     download_dir=download_dir,
+                                                     cookie=cookies,
+                                                     labels=["已整理", brush_config.brush_tag])
+                if not torrent_obj:
                     return None
                 else:
                     if brush_config.up_speed or brush_config.dl_speed:
-                        downloader.change_torrent(hash_string=torrent.hashString,
+                        downloader.change_torrent(hash_string=torrent_obj.hashString,
                                                   upload_limit=up_speed,
                                                   download_limit=down_speed)
-                    return torrent.hashString
+                    return torrent_obj.hashString
         return None
 
     def __qb_torrents_reannounce(self, torrent_hashes: List[str]):
