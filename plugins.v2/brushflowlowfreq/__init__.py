@@ -3259,8 +3259,37 @@ class BrushFlowLowFreq(_PluginBase):
             logger.error(f"获取下载链接失败：{torrent.title}")
             return None
 
-        # 强制给所有刷流种子加 &letdown=1（低分享率站点必备）
+        # ===== 强制预访问详情页 + 加强调试（蟹黄堡低比率专用）=====
+        if torrent.page_url:
+            logger.debug(f"【蟹黄堡低比率优化】先预访问详情页激活下载权限: {torrent.page_url}")
+            # 预访问详情页（关键！很多站点需要这一步）
+            pre_res = RequestUtils(
+                cookies=cookies,
+                proxies=proxies,
+                ua=torrent.site_ua,
+                headers={"Referer": torrent.page_url}  # 带 Referer 更像浏览器
+            ).get_res(torrent.page_url)
+            if pre_res and pre_res.status_code == 200:
+                logger.debug(f"预访问详情页成功，状态码 200")
+            else:
+                logger.warning(f"预访问详情页失败，状态码: {pre_res.status_code if pre_res else 'None'}")
+            time.sleep(1.5)  # 给服务器反应时间
+
+        # 强制加 letdown=1（你已经改过）
         torrent_content = self.__reset_download_url(torrent_url=torrent_content, site_id=torrent.site)
+
+        # ===== 关键调试：打印下载到的内容特征 =====
+        if isinstance(torrent_content, (bytes, bytearray)):
+            content_len = len(torrent_content)
+            is_torrent = torrent_content.startswith(b'd8:announce') or b'announce' in torrent_content[:200]
+            logger.debug(f"下载到内容长度: {content_len} 字节 | 是否有效torrent开头: {is_torrent}")
+            if not is_torrent and content_len < 500:
+                logger.warning(f"警告！下载内容疑似不是torrent！前200字符: {torrent_content[:200]}")
+        else:
+            logger.debug(f"下载内容不是二进制，直接传URL: {torrent_content[:100]}...")
+        # ============================================
+
+        logger.debug(f"站点 {torrent.site_name} 已强制添加 &letdown=1 并预访问详情页，准备添加任务")
         logger.debug(f"站点 {torrent.site_name} 已强制添加 letdown=1 参数，下载地址更新为 {torrent_content}")
 
         downloader = self.downloader
